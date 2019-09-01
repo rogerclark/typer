@@ -2,9 +2,10 @@
 
 #include "resource.h"
 
-
 typedef struct {
 	wchar_t filename[MAX_PATH];
+	LOGFONT font;
+	BOOL hasUnsavedChanges;
 } DOCUMENT_STATE;
 
 typedef struct {
@@ -18,7 +19,30 @@ typedef struct {
 
 APP_STATE app;
 
+const UINT TYPER_EDIT_ID = 0x573;
 const wchar_t* TYPER_WNDCLASS = L"Typer";
+const wchar_t* TYPER_CONFIG_FILENAME = L"C:\\typer.ini";
+
+void Typer_UpdateTitlebar() {
+	const wchar_t* suffixUnchanged = L"";
+	const wchar_t* suffixChanged = L"*";
+
+	enum { BUFSIZE = MAX_PATH * 2 };
+
+	wchar_t titleBuffer[BUFSIZE];
+	ZeroMemory(titleBuffer, BUFSIZE);
+
+	wchar_t* filenameOrUntitled = lstrlen(app.document.filename) ? app.document.filename : L"Untitled";
+
+	wsprintf(titleBuffer, L"%s%s - Typer", filenameOrUntitled,
+		app.document.hasUnsavedChanges ? suffixChanged : suffixUnchanged);
+	SetWindowText(app.hWnd, titleBuffer);
+}
+
+void Typer_FilenameChange(const wchar_t* filename) {
+	lstrcpy(app.document.filename, filename);
+	Typer_UpdateTitlebar();
+}
 
 BOOL Typer_OpenFile(const wchar_t* filename) {
 	BOOL success = FALSE;
@@ -41,12 +65,11 @@ BOOL Typer_OpenFile(const wchar_t* filename) {
 		*filePosition = 0;
 
 		if (filePosition != fileBuffer) {
+			app.document.hasUnsavedChanges = FALSE;
+			Typer_FilenameChange(filename);
 			SetWindowTextA(app.hWndEdit, (char*)fileBuffer);
 			success = TRUE;
 		}
-
-		// Insert the contents into the edit control
-		// If everything's okay... return TRUE
 
 		CloseHandle(file);
 	}
@@ -66,6 +89,8 @@ BOOL Typer_SaveFile(const wchar_t* filename) {
 			DWORD bytesWritten = 0;
 			if (WriteFile(file, fileBuffer, length, &bytesWritten, NULL)) {
 				if (bytesWritten == length) {
+					app.document.hasUnsavedChanges = FALSE;
+					Typer_FilenameChange(filename);
 					success = TRUE;
 				}
 			}
@@ -76,11 +101,43 @@ BOOL Typer_SaveFile(const wchar_t* filename) {
 	return success;
 }
 
+void Typer_ShowSaveAs() {
+	wchar_t filenameBuffer[MAX_PATH];
+	ZeroMemory(&filenameBuffer, MAX_PATH * sizeof(wchar_t));
+
+	OPENFILENAME ofn = { 0 };
+	ofn.lStructSize = sizeof(ofn);
+	ofn.hInstance = app.hInstance;
+	ofn.hwndOwner = app.hWnd;
+	ofn.lpstrTitle = L"Save As";
+	ofn.lpstrFilter = L"Text Files (*.txt)\0*.txt\0All Files (*.*)\0*.*\0";
+	ofn.lpstrFile = filenameBuffer;
+	ofn.nMaxFile = MAX_PATH;
+
+	if (GetSaveFileName(&ofn)) {
+		Typer_SaveFile(filenameBuffer);
+	}
+}
+
+void Typer_SaveOrPrompt() {
+	if (lstrlen(app.document.filename) == 0) {
+		Typer_ShowSaveAs();
+	} else {
+		Typer_SaveFile(app.document.filename);
+	}
+}
+
 LRESULT CALLBACK Typer_WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 	switch (msg) {
 		case WM_CREATE: {
 			app.hWndEdit = CreateWindowEx(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | ES_MULTILINE,
-				0, 0, 0, 0, hWnd, NULL, app.hInstance, NULL);
+				0, 0, 0, 0, hWnd, (HMENU)TYPER_EDIT_ID, app.hInstance, NULL);
+			app.hWnd = hWnd;
+			app.hFont = CreateFontIndirect(&app.document.font);
+			SendMessage(app.hWndEdit, WM_SETFONT, (WPARAM)app.hFont, TRUE);
+
+			Typer_UpdateTitlebar();
+
 			ShowWindow(app.hWndEdit, SW_SHOW);
 			ShowWindow(hWnd, SW_SHOW);
 			InvalidateRect(hWnd, NULL, TRUE);
@@ -102,6 +159,14 @@ LRESULT CALLBACK Typer_WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam
 		case WM_COMMAND: {
 			UINT id = LOWORD(wParam);
 			switch (id) {
+				case TYPER_EDIT_ID: {
+					UINT notification = HIWORD(wParam);
+					if (notification == EN_CHANGE) {
+						app.document.hasUnsavedChanges = TRUE;
+						Typer_UpdateTitlebar();
+					}
+					break;
+				}
 				case ID_TYPER_FILE_OPEN: {
 					wchar_t filenameBuffer[MAX_PATH];
 					ZeroMemory(&filenameBuffer, MAX_PATH * sizeof(wchar_t));
@@ -122,24 +187,12 @@ LRESULT CALLBACK Typer_WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam
 					break;
 				}
 				case ID_TYPER_FILE_SAVE: {
+					// Check to see if app.document.filename is valid
+					Typer_SaveOrPrompt();
 					break;
 				}
 				case ID_TYPER_FILE_SAVE_AS: {
-					wchar_t filenameBuffer[MAX_PATH];
-					ZeroMemory(&filenameBuffer, MAX_PATH * sizeof(wchar_t));
-
-					OPENFILENAME ofn = { 0 };
-					ofn.lStructSize = sizeof(ofn);
-					ofn.hInstance = app.hInstance;
-					ofn.hwndOwner = hWnd;
-					ofn.lpstrTitle = L"Save As";
-					ofn.lpstrFilter = L"Text Files (*.txt)\0*.txt\0All Files (*.*)\0*.*\0";
-					ofn.lpstrFile = filenameBuffer;
-					ofn.nMaxFile = MAX_PATH;
-
-					if (GetSaveFileName(&ofn)) {
-						Typer_SaveFile(filenameBuffer);
-					}
+					Typer_ShowSaveAs();
 					break;
 				}
 				case ID_TYPER_FORMAT_FONT: {
@@ -154,13 +207,18 @@ LRESULT CALLBACK Typer_WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam
 					cf.Flags = CF_SCREENFONTS;
 
 					if (ChooseFont(&cf)) {
+						if (app.hFont != NULL) {
+							DeleteObject(app.hFont);
+						}
+
 						app.hFont = CreateFontIndirect(&logfont);
+						memcpy(&app.document.font, &logfont, sizeof(LOGFONT));
 						SendMessage(app.hWndEdit, WM_SETFONT, (WPARAM)app.hFont, TRUE);
 					}
 					break;
 				}
 				case ID_HELP_ABOUT: {
-					wchar_t* aboutText = L"Typer Version 0.1\r\nby @rogerclark\r\ngreetz to EFnet #winprog & Twitch chat";
+					wchar_t* aboutText = L"Typer Version 0.2\r\nby @rogerclark\r\ngreetz to EFnet #winprog & Twitch chat";
 					MessageBox(NULL, aboutText, L"About", MB_OK);
 					break;
 				}
@@ -172,7 +230,28 @@ LRESULT CALLBACK Typer_WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam
 			break;
 		}
 		case WM_CLOSE: {
-			DestroyWindow(hWnd);
+			BOOL shouldClose = FALSE;
+
+			if (app.document.hasUnsavedChanges) {
+				UINT result = MessageBox(hWnd, L"The file has unsaved changes. Do you want to save?",
+					L"Typer", MB_YESNOCANCEL | MB_ICONWARNING);
+				if (result == IDYES) {
+					Typer_SaveOrPrompt();
+					shouldClose = TRUE;
+				} else if (result == IDNO) {
+					shouldClose = TRUE;
+				} else if (result == IDCANCEL) {
+					shouldClose = FALSE;
+				}
+			} else {
+				shouldClose = TRUE;
+			}
+
+			// if shouldClose is TRUE, then DefWindowProc will call DestroyWindow()
+			if (shouldClose == FALSE) {
+				return 0;
+			}
+
 			break;
 		}
 		case WM_DESTROY: {
@@ -203,6 +282,28 @@ BOOL Typer_RegisterClass(HINSTANCE instance) {
 	return (RegisterClassEx(&wc) != 0);
 }
 
+BOOL WritePrivateProfileInt(const wchar_t* section, const wchar_t* keyname, LONG value, const wchar_t* inifile) {
+	wchar_t valueString[32] = { 0 };
+	wsprintf(valueString, L"%d", value);
+	return WritePrivateProfileString(section, keyname, valueString, inifile);
+}
+
+const wchar_t* TYPER_CONFIG_KEY_FONT = L"Font";
+
+void Typer_SaveSettings() {
+	WritePrivateProfileString(TYPER_CONFIG_KEY_FONT, L"FaceName", app.document.font.lfFaceName, TYPER_CONFIG_FILENAME);
+	WritePrivateProfileInt(TYPER_CONFIG_KEY_FONT, L"Weight", app.document.font.lfWeight, TYPER_CONFIG_FILENAME);
+	WritePrivateProfileInt(TYPER_CONFIG_KEY_FONT, L"Height", app.document.font.lfHeight, TYPER_CONFIG_FILENAME);
+	WritePrivateProfileInt(TYPER_CONFIG_KEY_FONT, L"Italic", app.document.font.lfItalic, TYPER_CONFIG_FILENAME);
+}
+
+void Typer_LoadSettings() {
+	GetPrivateProfileString(TYPER_CONFIG_KEY_FONT, L"FaceName", L"Courier New", app.document.font.lfFaceName, LF_FACESIZE, TYPER_CONFIG_FILENAME);
+	app.document.font.lfWeight = GetPrivateProfileInt(TYPER_CONFIG_KEY_FONT, L"Weight", 400, TYPER_CONFIG_FILENAME);
+	app.document.font.lfHeight = (INT)GetPrivateProfileInt(TYPER_CONFIG_KEY_FONT, L"Height", -27, TYPER_CONFIG_FILENAME);
+	app.document.font.lfItalic = GetPrivateProfileInt(TYPER_CONFIG_KEY_FONT, L"Italic", 0, TYPER_CONFIG_FILENAME);
+}
+
 int WINAPI WinMain(HINSTANCE instance, HINSTANCE prevInstance, PSTR cmdLine, int show) {
 	if (!Typer_RegisterClass(instance)) {
 		MessageBox(NULL, L"Couldn't register window class!", L"Error", MB_OK | MB_ICONERROR);
@@ -210,13 +311,18 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE prevInstance, PSTR cmdLine, int
 
 	ZeroMemory(&app, sizeof(APP_STATE));
 	app.hInstance = instance;
-	app.hWnd = CreateWindowEx(0, TYPER_WNDCLASS, L"Typer", WS_OVERLAPPEDWINDOW, 0, 0, 640, 480, NULL, NULL, instance, NULL);
+
+	Typer_LoadSettings();
+
+	app.hWnd = CreateWindowEx(0, TYPER_WNDCLASS, L"Typer", WS_OVERLAPPEDWINDOW, 0, 0, 960, 540, NULL, NULL, instance, NULL);
 
 	MSG msg = { 0 };
 	while (GetMessage(&msg, NULL, 0, 0)) {
 		TranslateMessage(&msg);
 		DispatchMessage(&msg);
 	}
+
+	Typer_SaveSettings();
 
 	return 0;
 }
