@@ -1,7 +1,7 @@
-Typer
+Typer v0.2
 
 
-A simple Notepad clone built during ia series of live video tutorials
+A simple Notepad clone built during a series of live video tutorials
 about C and Win32 programming using Windows 2000 and Visual Studio 6.
 
 
@@ -22,6 +22,12 @@ Tutorial Part 2:
 
 greetz to EFnet #winprog and the Twitch chat
 https://winprog.org/
+
+
+thanks to coda, Dylan James and xaimus for background music
+https://soundcloud.com/coda
+https://soundcloud.com/xaimus
+
 
 https://twitter.com/rogerclark
 https://rogerclark.org/
